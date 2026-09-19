@@ -187,25 +187,6 @@ Unit tests cover the core order calculation logic (`computeTotals`) — subtotal
 
 ---
 
-## 🐳 Docker
-
-Build and run with Docker:
-
-```bash
-docker build -t bookworm .
-docker run -p 3000:3000 \
-  -e DATABASE_URL=postgresql://user:pass@host:5432/bookworm \
-  -e JWT_SECRET=your-secret \
-  bookworm
-```
-
-- Base image: `registry.redhat.io/ubi9/nodejs-20-minimal` (Red Hat UBI 9)
-- Runs as non-root user (UID 1001)
-- Production-only dependencies
-- Exposes port 3000
-
----
-
 ## 🔐 Security
 
 - Passwords hashed with **bcrypt** before storage
