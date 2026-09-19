@@ -1,4 +1,4 @@
-# 📚 BookWorm
+#  BookWorm
 
 A full-stack e-bookstore web application built as a Capstone Project. Users can browse books, manage a cart, place orders, track deliveries, maintain a wishlist, and follow authors — all through a clean, dark-themed UI.
 
