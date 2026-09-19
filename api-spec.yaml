@@ -1,0 +1,492 @@
+openapi: 3.1.0
+info:
+  title: BookWorm API
+  version: 1.0.0
+  description: Full-stack e-bookstore API — Next.js Route Handlers, PostgreSQL, JWT auth, Razorpay payment.
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+
+components:
+  securitySchemes:
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: auth_token
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    User:
+      type: object
+      properties:
+        id:        { type: string, format: uuid }
+        email:     { type: string, format: email }
+        fullName:  { type: string }
+        giftPoints:{ type: integer }
+        role:      { type: string, enum: [customer, admin] }
+
+    Book:
+      type: object
+      properties:
+        id:              { type: string, format: uuid }
+        title:           { type: string }
+        author:          { type: string }
+        price:           { type: number }
+        format:          { type: string, enum: [paperback, hardcover, ebook] }
+        language:        { type: string }
+        cover_image_url: { type: string }
+        description:     { type: string }
+        author_bio:      { type: string }
+        rating:          { type: number }
+        sales_count:     { type: integer }
+        delivery_days:   { type: integer }
+        stock:           { type: integer }
+        is_featured:     { type: boolean }
+        category_name:   { type: string }
+        category_slug:   { type: string }
+        publisher_name:  { type: string }
+        publisher_slug:  { type: string }
+
+    CartItem:
+      type: object
+      properties:
+        id:          { type: string, format: uuid }
+        quantity:    { type: integer }
+        book_id:     { type: string, format: uuid }
+        title:       { type: string }
+        author:      { type: string }
+        price:       { type: number }
+        format:      { type: string }
+        cover_image_url: { type: string }
+        delivery_days:   { type: integer }
+
+    OrderItem:
+      type: object
+      properties:
+        id:         { type: string, format: uuid }
+        quantity:   { type: integer }
+        unit_price: { type: number }
+        book_id:    { type: string, format: uuid }
+        title:      { type: string }
+        author:     { type: string }
+        cover:      { type: string }
+        format:     { type: string }
+
+    Order:
+      type: object
+      properties:
+        id:              { type: string, format: uuid }
+        status:          { type: string, enum: [pending, confirmed, cancelled] }
+        subtotal:        { type: number }
+        tax:             { type: number }
+        delivery_charge: { type: number }
+        discount:        { type: number }
+        total:           { type: number }
+        payment_method:  { type: string }
+        gift_points_used:{ type: integer }
+        created_at:      { type: string, format: date-time }
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/OrderItem'
+
+paths:
+  # ── Auth ────────────────────────────────────────────────────────────────────
+  /api/auth/register:
+    post:
+      summary: Register a new user
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [fullName, email, password, confirmPassword]
+              properties:
+                fullName:        { type: string }
+                email:           { type: string, format: email }
+                password:        { type: string, minLength: 8 }
+                confirmPassword: { type: string }
+      responses:
+        '201':
+          description: Registered — auth_token cookie is set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400': { description: Validation error, content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+        '409': { description: Email already in use }
+
+  /api/auth/login:
+    post:
+      summary: Login with email and password
+      tags: [Auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:    { type: string, format: email }
+                password: { type: string }
+      responses:
+        '200':
+          description: Logged in — auth_token cookie is set
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401': { description: Invalid credentials }
+
+  /api/auth/logout:
+    post:
+      summary: Clear auth cookie
+      tags: [Auth]
+      responses:
+        '200': { description: Logged out }
+
+  /api/auth/me:
+    get:
+      summary: Get current authenticated user
+      tags: [Auth]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: Current user or null
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  user:
+                    oneOf:
+                      - $ref: '#/components/schemas/User'
+                      - type: 'null'
+
+  # ── Categories ──────────────────────────────────────────────────────────────
+  /api/categories:
+    get:
+      summary: List all categories
+      tags: [Catalogue]
+      responses:
+        '200':
+          description: Array of categories
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:   { type: string, format: uuid }
+                    name: { type: string }
+                    slug: { type: string }
+
+  # ── Publishers ──────────────────────────────────────────────────────────────
+  /api/publishers:
+    get:
+      summary: List all publishers
+      tags: [Catalogue]
+      responses:
+        '200':
+          description: Array of publishers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    id:   { type: string, format: uuid }
+                    name: { type: string }
+                    slug: { type: string }
+
+  # ── Books ───────────────────────────────────────────────────────────────────
+  /api/books:
+    get:
+      summary: List and filter books
+      tags: [Catalogue]
+      parameters:
+        - { name: category,  in: query, schema: { type: string }, description: Category slug }
+        - { name: publisher, in: query, schema: { type: string }, description: Publisher slug }
+        - { name: format,    in: query, schema: { type: string, enum: [paperback, hardcover, ebook] } }
+        - { name: language,  in: query, schema: { type: string } }
+        - { name: minPrice,  in: query, schema: { type: number } }
+        - { name: maxPrice,  in: query, schema: { type: number } }
+        - { name: sort,      in: query, schema: { type: string, enum: [relevance, price_asc, price_desc, bestselling, new_arrivals] } }
+        - { name: q,         in: query, schema: { type: string }, description: Search query }
+        - { name: page,      in: query, schema: { type: integer, default: 1 } }
+        - { name: pageSize,  in: query, schema: { type: integer, default: 16 } }
+      responses:
+        '200':
+          description: Paginated book list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  books:    { type: array, items: { $ref: '#/components/schemas/Book' } }
+                  total:    { type: integer }
+                  page:     { type: integer }
+                  pageSize: { type: integer }
+
+  /api/books/recommended:
+    get:
+      summary: Get recommended books
+      tags: [Catalogue]
+      security: [{ cookieAuth: [] }]
+      description: Returns personalised recommendations for authenticated users (based on order history), or bestsellers for guests.
+      responses:
+        '200':
+          description: Array of books
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Book'
+
+  /api/books/{id}:
+    get:
+      summary: Get book detail
+      tags: [Catalogue]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Book detail, content: { application/json: { schema: { $ref: '#/components/schemas/Book' } } } }
+        '404': { description: Not found }
+
+  /api/books/{id}/related:
+    get:
+      summary: Get related books
+      tags: [Catalogue]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Up to 4 related books
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Book'
+
+  # ── Cart ────────────────────────────────────────────────────────────────────
+  /api/cart:
+    get:
+      summary: Get cart items
+      tags: [Cart]
+      responses:
+        '200':
+          description: Cart items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CartItem'
+    post:
+      summary: Add item to cart
+      tags: [Cart]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bookId]
+              properties:
+                bookId:   { type: string, format: uuid }
+                quantity: { type: integer, default: 1 }
+      responses:
+        '201': { description: Added to cart }
+        '404': { description: Book not found }
+
+  /api/cart/{itemId}:
+    patch:
+      summary: Update cart item quantity
+      tags: [Cart]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [quantity]
+              properties:
+                quantity: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Updated }
+    delete:
+      summary: Remove item from cart
+      tags: [Cart]
+      parameters:
+        - { name: itemId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Removed }
+
+  # ── Wishlist ─────────────────────────────────────────────────────────────────
+  /api/wishlist:
+    get:
+      summary: Get wishlist
+      tags: [Wishlist]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200': { description: Wishlist items }
+        '401': { description: Unauthorised }
+    post:
+      summary: Add to wishlist
+      tags: [Wishlist]
+      security: [{ cookieAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [bookId]
+              properties:
+                bookId: { type: string, format: uuid }
+      responses:
+        '201': { description: Added }
+        '401': { description: Unauthorised }
+
+  /api/wishlist/{bookId}:
+    delete:
+      summary: Remove from wishlist
+      tags: [Wishlist]
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: bookId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Removed }
+        '401': { description: Unauthorised }
+
+  # ── Orders ───────────────────────────────────────────────────────────────────
+  /api/orders:
+    get:
+      summary: Get order history
+      tags: [Orders]
+      security: [{ cookieAuth: [] }]
+      responses:
+        '200':
+          description: List of orders with items
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
+        '401': { description: Unauthorised }
+
+  /api/orders/{orderId}:
+    get:
+      summary: Get single order detail
+      tags: [Orders]
+      security: [{ cookieAuth: [] }]
+      parameters:
+        - { name: orderId, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Order detail, content: { application/json: { schema: { $ref: '#/components/schemas/Order' } } } }
+        '404': { description: Not found }
+        '403': { description: Forbidden }
+
+  # ── Checkout ─────────────────────────────────────────────────────────────────
+  /api/checkout/create-order:
+    post:
+      summary: Create checkout order and initiate payment
+      tags: [Checkout]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                addressData:
+                  type: object
+                  properties:
+                    firstName:   { type: string }
+                    lastName:    { type: string }
+                    addressLine: { type: string }
+                    city:        { type: string }
+                    state:       { type: string }
+                    pin:         { type: string }
+                    phone:       { type: string }
+                giftPointsToRedeem: { type: integer, default: 0 }
+                paymentMethod:      { type: string, default: card }
+                guestEmail:         { type: string, format: email }
+      responses:
+        '200':
+          description: Order created — Razorpay or mock order details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId:       { type: string, format: uuid }
+                  razorpayOrderId: { type: string }
+                  amount:        { type: number }
+                  currency:      { type: string }
+                  isMock:        { type: boolean }
+        '400': { description: Cart is empty or validation error }
+
+  /api/checkout/verify-payment:
+    post:
+      summary: Verify payment and confirm order
+      tags: [Checkout]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId]
+              properties:
+                orderId:           { type: string, format: uuid }
+                razorpayOrderId:   { type: string }
+                razorpayPaymentId: { type: string }
+                razorpaySignature: { type: string }
+      responses:
+        '200':
+          description: Payment verified, order confirmed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orderId: { type: string, format: uuid }
+                  status:  { type: string }
+        '400': { description: Invalid signature or missing params }
+        '404': { description: Order not found }
+
+  /api/checkout/cancel:
+    post:
+      summary: Cancel an order within 48 hours
+      tags: [Checkout]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [orderId]
+              properties:
+                orderId: { type: string, format: uuid }
+      responses:
+        '200': { description: Order cancelled }
+        '400': { description: Cancellation window passed or already cancelled }
+        '404': { description: Order not found }
